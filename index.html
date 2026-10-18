@@ -2,7 +2,6 @@
 <html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Throne Wars</title>
-<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <style>
 :root{color-scheme:dark;--bg:#0d1117;--p:#161d28;--t:#e8ecf3;--m:#8a96a8;--a:#f5b942;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 *{box-sizing:border-box}html,body{height:100%;margin:0;background:var(--bg);color:var(--t);font:14px system-ui,Segoe UI,Arial,sans-serif;overflow:hidden;user-select:none}
@@ -103,20 +102,31 @@ const prof=()=>{const n=($('nick').value.trim()||'Герой').slice(0,14);try{l
 if(location.hash.length>=5)$('code').value=location.hash.slice(1,6).toUpperCase();
 function show(id){['main','lobby'].forEach(k=>$(k).style.display=k==id?'flex':'none')}
 /* ---------- ЛОББИ / СЕТЬ ---------- */
-const PO={debug:0,config:{iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'},{urls:'stun:global.stun.twilio.com:3478'},{urls:['turn:openrelay.metered.ca:80','turn:openrelay.metered.ca:443','turn:openrelay.metered.ca:443?transport=tcp'],username:'openrelayproject',credential:'openrelayproject'}]}};
 let stT;function st(t,e){const b=$('st');b.textContent=t;b.className=e?'e':'';b.style.display='block';clearTimeout(stT);stT=setTimeout(()=>b.style.display='none',e?15000:4000)}
 const gen=()=>Array.from({length:5},()=>'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.random()*32|0]).join('');
 const strip=p=>({id:p.id,nick:p.nick,hero:p.hero,col:p.col,team:p.team});
 function lobbyUI(){$('plist').innerHTML=LP.map(p=>`<div class="pl"><span class="dot" style="background:${esc(p.col)}"></span><b>${esc(p.nick)}${p.id==myId?' (ты)':''}</b><small>${HS[p.hero].n}</small><span class="tm t${p.team}">${p.team?'Тьма':'Свет'}</span></div>`).join('');
  const me=LP.find(p=>p.id==myId);if(me){$('lh').value=me.hero;$('lcol').value=me.col}$('sg').style.display=isHost?'block':'none';$('wait').style.display=isHost?'none':'block'}
 function bl(){for(const p of LP)if(p.c&&p.c.open)p.c.send({t:'lobby',p:LP.map(strip),you:p.id});lobbyUI()}
-function mkLobby(){if(typeof Peer=='undefined')return st('Не загрузилась сетевая библиотека PeerJS (cdn.jsdelivr.net недоступен?). Нужен интернет / VPN.',1);
- const pf=prof();isHost=true;myId='host';roomCode=gen();LP=[{id:'host',...pf,team:0}];st('Создаю комнату…');
- peer=new Peer('thrw-'+roomCode,PO);let op=false;setTimeout(()=>{if(!op)st('Сервер PeerJS не отвечает (возможно заблокирован провайдером). Попробуй VPN или другую сеть.',1)},9000);
- peer.on('error',e=>{if(e.type=='unavailable-id'){peer.destroy();mkLobby()}else st('Ошибка сети: '+e.type,1)});
- peer.on('disconnected',()=>{try{peer.reconnect()}catch(e){}});
- peer.on('open',()=>{op=true;$('lc').textContent=roomCode;show('lobby');lobbyUI();st('Комната создана. Отправь друзьям ссылку.')});
- peer.on('connection',c=>{c.on('data',m=>hostMsg(c,m));c.on('close',()=>{const p=LP.find(q=>q.id==c.peer);if(!p)return;if(started){if(p.u)p.u.owner=null}else{LP=LP.filter(q=>q!=p);bl()}})})}
+let ws=null,peers={};
+function srvUrl(){let s='';try{s=localStorage.getItem('tw_srv')||''}catch(e){}if(s)return s;
+ if(!/github\.io$/.test(location.hostname)&&location.protocol.startsWith('http'))return location.origin.replace(/^http/,'ws');
+ s=(prompt('Адрес сервера игры (например https://throne-wars.onrender.com):','')||'').trim().replace(/\/+$/,'');if(!s)return'';
+ s=/^https?:/.test(s)?s.replace(/^http/,'ws'):/^wss?:/.test(s)?s:'wss://'+s;try{localStorage.setItem('tw_srv',s)}catch(e){}return s}
+function wsOpen(onopen){const u=srvUrl();if(!u){st('Нужен адрес сервера. Открой игру по ссылке сервера (onrender.com).',1);return false}
+ st('Подключаюсь к серверу (если он спал — до минуты)…');ws=new WebSocket(u);let ok=false;
+ const tm=setTimeout(()=>{if(!ok)st('Сервер не отвечает. Подожди минуту и попробуй снова.',1)},70000);
+ ws.onopen=()=>{ok=true;clearTimeout(tm);setInterval(()=>{try{ws.send('{"t":"ping"}')}catch(e){}},25000);onopen()};
+ ws.onerror=()=>{if(!ok){try{localStorage.removeItem('tw_srv')}catch(e){}st('Не удалось подключиться к серверу '+u+'. Обнови страницу и проверь адрес.',1)}};
+ ws.onclose=()=>{if(ok&&!ended&&started&&!isHost){alert('Соединение потеряно');location.reload()}};return true}
+function mkLobby(){const pf=prof();isHost=true;myId='host';LP=[{id:'host',...pf,team:0}];
+ if(!wsOpen(()=>ws.send(JSON.stringify({t:'create'}))))return;
+ ws.onmessage=e=>{const m=JSON.parse(e.data);
+  if(m.t=='created'){roomCode=m.code;$('lc').textContent=roomCode;show('lobby');lobbyUI();st('Комната создана. Отправь друзьям ссылку.')}
+  else if(m.t=='peer')peers[m.id]={peer:m.id,open:true,send:x=>{if(ws.readyState==1)ws.send(JSON.stringify({t:'to',id:m.id,m:x}))}};
+  else if(m.t=='from'){const c=peers[m.id];if(c)hostMsg(c,m.m)}
+  else if(m.t=='peerleft')dropPeer(m.id)}}
+function dropPeer(id){delete peers[id];const p=LP.find(q=>q.id==id);if(!p)return;if(started){if(p.u)p.u.owner=null}else{LP=LP.filter(q=>q!=p);bl()}}
 function hostMsg(c,m){const p=LP.find(q=>q.id==c.peer);
  if(m.t=='join'){if(started||LP.length>=8||p)return c.send({t:'full'});const n=LP.filter(q=>q.team).length;LP.push({id:c.peer,nick:String(m.nick||'Герой').slice(0,14),hero:m.hero>=0&&m.hero<3?m.hero|0:0,col:/^#[0-9a-f]{6}$/i.test(m.col)?m.col:'#fff',team:n*2>LP.length?0:1,c});bl()}
  else if(!p)return;else if(m.t=='cfg')updP(p.id,m);else cmd(p.id,m)}
@@ -125,17 +135,15 @@ function cfgSend(o){if(isHost)updP('host',o);else conn&&conn.send({t:'cfg',...o}
 $('lh').onchange=()=>cfgSend({hero:+$('lh').value});$('lcol').oninput=()=>cfgSend({col:$('lcol').value});
 $('tb').onclick=()=>{const me=LP.find(p=>p.id==myId);if(me)cfgSend({team:1-me.team})};
 function copyLink(){const u=location.href.split('#')[0]+'#'+roomCode;(navigator.clipboard?navigator.clipboard.writeText(u):Promise.reject()).then(()=>$('cb').textContent='✅ Скопировано',()=>prompt('Ссылка:',u))}
-function joinBtn(){const code=$('code').value.trim().toUpperCase();if(code.length<4)return st('Введи код комнаты',1);if(typeof Peer=='undefined')return st('Не загрузилась сетевая библиотека PeerJS (cdn.jsdelivr.net недоступен?). Нужен интернет / VPN.',1);
- const pf=prof();st('Подключаюсь к серверу…');let ok=false,op=false;peer=new Peer(undefined,PO);
- setTimeout(()=>{if(!op)st('Сервер PeerJS не отвечает. Попробуй VPN или другую сеть.',1)},9000);
- setTimeout(()=>{if(!ok&&op)st('Не удалось соединиться с хостом за 20 сек. Хост должен держать вкладку открытой. Если не выходит — попробуйте другую сеть или VPN.',1)},20000);
- peer.on('error',e=>st(e.type=='peer-unavailable'?'Комнаты с кодом '+code+' нет. Проверь код, хост должен быть в лобби.':'Ошибка сети: '+e.type,1));
- peer.on('open',()=>{op=true;st('Ищу комнату '+code+'…');conn=peer.connect('thrw-'+code,{serialization:'json',reliable:true});conn.on('error',e=>st('Ошибка соединения: '+e,1));
-  conn.on('open',()=>{ok=true;st('Соединено!');conn.send({t:'join',...pf})});
-  conn.on('close',()=>{if(!ended){alert('Соединение потеряно');location.reload()}});
-  conn.on('data',m=>{if(m.t=='full'){alert('Комната закрыта или полна');location.reload()}
-   else if(m.t=='lobby'){LP=m.p;myId=m.you;roomCode=code;$('lc').textContent=code;show('lobby');lobbyUI()}
-   else if(m.t=='start')enter(m.me,m.team);else if(m.t=='snap')applySnap(m.s)})})}
+function joinBtn(){const code=$('code').value.trim().toUpperCase();if(code.length<4)return st('Введи код комнаты',1);const pf=prof();
+ if(!wsOpen(()=>ws.send(JSON.stringify({t:'join',code}))))return;
+ ws.onmessage=e=>{const m=JSON.parse(e.data);
+  if(m.t=='joined'){conn={open:true,send:x=>{if(ws.readyState==1)ws.send(JSON.stringify({t:'msg',m:x}))}};st('Соединено!');conn.send({t:'join',...pf})}
+  else if(m.t=='nojoin')st('Комнаты '+code+' нет. Хост должен быть в лобби.',1);
+  else if(m.t=='hostgone'){alert('Хост вышел из игры');location.reload()}
+  else if(m.t=='full'){alert('Комната закрыта или полна');location.reload()}
+  else if(m.t=='lobby'){LP=m.p;myId=m.you;roomCode=code;$('lc').textContent=code;show('lobby');lobbyUI()}
+  else if(m.t=='start')enter(m.me,m.team);else if(m.t=='snap')applySnap(m.s)}}
 function solo(){isHost=true;myId='host';LP=[{id:'host',...prof(),team:0}];startGame()}
 /* ---------- СИМУЛЯЦИЯ (хост) ---------- */
 function mk(team,type,x,y,o={}){const t=TYP[type]||{};const u={id:nid++,team,type,x,y,hp:t.hp,dmg:t.dmg,rng:t.rng,spd:t.spd,r:t.r,ac:t.ac,ag:t.ag,xp:t.xp,g:t.g,cd:0,stun:0,rage:0,wp:0,lvl:1,exp:0,...o};u.max=u.hp;return u}
